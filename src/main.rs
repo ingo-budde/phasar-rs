@@ -39,7 +39,7 @@ trait ICFG {
 // Open Question: Can we really "remove" the EdgeFunction concept? How to represent it instead?
 
 trait Joinable {
-    fn join_with(&self, edge2: Self) -> Self;
+    fn join_with(&self, edge2: Self) -> Self; // merge multiple branches potentially loosing information.
 }
 trait Composable {
     fn compose_with(&self, edge2: Self) -> Self; // sequential application of two edge functions (first x+=1, then x+=2 -> results in x+=3)
