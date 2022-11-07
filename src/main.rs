@@ -22,6 +22,9 @@ struct ProgramPos {
     statement_index: StatementIndex,
 }
 
+pub mod control_flow;
+pub mod ir;
+
 struct ICFGEdge {
     current: ProgramPos,
     successor: ProgramPos,
@@ -30,7 +33,10 @@ struct ICFGEdge {
 // TODO: Summaries!
 trait ICFG {
     fn get_successors(&self, pos: ProgramPos) -> Vec<ProgramPos>; // TODO: What about return statement? How are they able to return the successor function_index without knowing the call stack?
-    fn get_call_instructions_in_function_as_program_pos(&self, function: FunctionIndex) -> Vec<ProgramPos>;
+    fn get_call_instructions_in_function_as_program_pos(
+        &self,
+        function: FunctionIndex,
+    ) -> Vec<ProgramPos>;
     fn all_instructions(&self) -> Vec<ProgramPos>;
     fn is_starting_point_or_call_site(&self, pos: ProgramPos) -> bool;
     fn get_starting_point_for(&self, function: FunctionIndex) -> ProgramPos;
@@ -48,26 +54,26 @@ trait Computable<ConcreteValue> {
     fn compute(&self, input: &ConcreteValue) -> ConcreteValue; // evaluates this edge function for a concrete value, returning a resulting value of the same type.
 }
 
-
 pub mod ide {
+    use super::*;
     use std::collections::{HashMap, HashSet};
     use std::hash::Hash;
-    use super::*;
 
     struct IDEJumpFunctionTable<P: IDEProblem> {
-        x: Vec<HashMap<JumpFunctionKey<P>, P::Weight>>
+        x: Vec<HashMap<JumpFunctionKey<P>, P::Weight>>,
     }
-    impl <P: IDEProblem> Default for IDEJumpFunctionTable<P> {
+    impl<P: IDEProblem> Default for IDEJumpFunctionTable<P> {
         fn default() -> Self {
             IDEJumpFunctionTable { x: vec![] }
         }
     }
-    impl <P: IDEProblem> IDEJumpFunctionTable<P> {
-        pub fn already_visited(&self, item: &Phase1WorklistItem<P>) -> bool { todo!() }
+    impl<P: IDEProblem> IDEJumpFunctionTable<P> {
+        pub fn already_visited(&self, item: &Phase1WorklistItem<P>) -> bool {
+            todo!()
+        }
         pub fn get_at_program_pos(&self, pos: ProgramPos) -> P::Weight {
             todo!()
         }
-
     }
     trait IDEProblem {
         type FlowFact: Clone + Hash + Eq;
@@ -90,17 +96,23 @@ pub mod ide {
     struct SolverResults<P: IDEProblem> {
         concrete_values: HashMap<(ProgramPos, P::FlowFact), P::ConcreteValue>,
     }
-    impl <P: IDEProblem> Default for SolverResults<P> {
+    impl<P: IDEProblem> Default for SolverResults<P> {
         fn default() -> Self {
-            SolverResults { concrete_values: HashMap::default() }
+            SolverResults {
+                concrete_values: HashMap::default(),
+            }
         }
     }
-    impl <P: IDEProblem> SolverResults<P> {
-        fn insert_or_join(&mut self, weight: P::Weight, flow_fact: P::FlowFact, computed_value: P::ConcreteValue) -> bool {
+    impl<P: IDEProblem> SolverResults<P> {
+        fn insert_or_join(
+            &mut self,
+            weight: P::Weight,
+            flow_fact: P::FlowFact,
+            computed_value: P::ConcreteValue,
+        ) -> bool {
             todo!()
         }
     }
-
 
     #[derive(Hash)]
     struct JumpFunctionKey<P: IDEProblem> {
@@ -121,7 +133,7 @@ pub mod ide {
         // IDE specific:
         edge_function: P::Weight, // ?
     }
-    impl <P: IDEProblem> Phase1WorklistItem<P> {
+    impl<P: IDEProblem> Phase1WorklistItem<P> {
         pub fn new_with_entry_point(entry_point: &EntryPoint<P>) -> Self {
             todo!()
         }
@@ -135,25 +147,29 @@ pub mod ide {
         flow_fact: P::FlowFact,
         concrete_value: P::ConcreteValue,
     }
-    fn propagate_into_callees<P: IDEProblem>(call_instruction: ProgramPos) -> Vec<Phase2WorklistItem<P>> {
+    fn propagate_into_callees<P: IDEProblem>(
+        call_instruction: ProgramPos,
+    ) -> Vec<Phase2WorklistItem<P>> {
         todo!()
     }
 
-
-    fn solve<P: IDEProblem>(problem: P, entry_points: Vec<EntryPoint<P>>, icfg: &impl ICFG) -> SolverResults<P> {
-    
+    fn solve<P: IDEProblem>(
+        problem: P,
+        entry_points: Vec<EntryPoint<P>>,
+        icfg: &impl ICFG,
+    ) -> SolverResults<P> {
         // Jump Function = Edge in CFG.
         // Starting point: First instruction of current function with the flow facts that hold before that instructions (passed in by call site).
         // End point (second part of key in hashmap): Last inst
-    
+
         // FlowFact = Variable für die wir die Jump Function berechnen, oder allgemein: Was wir mit der Analyse "verfolgen"; wofür wir die EdgeValues berechnen.
-        // The first flow fact: 
+        // The first flow fact:
         // The second flow fact is the tainted variable.
-        // 
+        //
 
         // IDE: We have weights. Jump function is a HashMap.
         // IFDS: We don't have weights. Jump function is a HashSet which just tells us that we visited this worklist item already.
-        
+
         // We can remove items for finished functions with completely built JumpFunctions again
         // let mut already_visited: HashSet<WorklistItem> = HashSet::new();
         let mut ide_jump_function_table = IDEJumpFunctionTable::default();
@@ -184,7 +200,7 @@ pub mod ide {
                 worklist.push(Phase2WorklistItem {
                     instruction: entry_point.instruction,
                     flow_fact: entry_point.flow_fact.clone(),
-                    concrete_value: entry_point.concrete_value.clone()
+                    concrete_value: entry_point.concrete_value.clone(),
                 });
             }
 
@@ -201,8 +217,6 @@ pub mod ide {
                 }
             }
 
-
-
             // Phase 2.2: Compute all concrete values for all instructions not yet visited in Phase 2.1
             for program_pos in icfg.all_instructions() {
                 if icfg.is_starting_point_or_call_site(program_pos) {
@@ -213,10 +227,15 @@ pub mod ide {
                 let starting_point_fact = todo!(); // How do we get the starting point fact?
                 let weight: P::Weight = ide_jump_function_table.get_at_program_pos(program_pos);
 
-                if let Some(value) = results.concrete_values.get(&(program_pos, starting_point_fact)) {
+                if let Some(value) = results
+                    .concrete_values
+                    .get(&(program_pos, starting_point_fact))
+                {
                     let computed_value = weight.compute(value);
                     let flow_fact = todo!(); // TODO
-                    results.concrete_values.insert((program_pos, flow_fact), computed_value);
+                    results
+                        .concrete_values
+                        .insert((program_pos, flow_fact), computed_value);
                 }
             }
 
@@ -225,14 +244,10 @@ pub mod ide {
     }
 }
 
-fn main() {
-
-}
+fn main() {}
 
 #[cfg(tests)]
 mod tests {
     #[test]
-    fn test_dummy() {
-
-    }
+    fn test_dummy() {}
 }
