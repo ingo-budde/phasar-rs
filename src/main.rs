@@ -23,6 +23,7 @@ struct ProgramPos {
 }
 
 pub mod control_flow;
+pub mod data_flow;
 pub mod ir;
 
 struct ICFGEdge {

@@ -1,6 +1,6 @@
 pub trait IRDescription {
-    type Instruction;
-    type Value;
-    type Function;
-    type GlobalVariable;
+    type Instruction: Copy + Eq;
+    type Value: Copy + Eq;
+    type Function: Copy + Eq;
+    type GlobalVariable: Copy + Eq;
 }
