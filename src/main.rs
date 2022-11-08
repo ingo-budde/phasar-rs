@@ -1,58 +1,86 @@
-// Trait PointsToInfo
-//trait PointsToInfo {
-//    PointsToSet get_points_to_set(pointer: P, instruction: I);
-//}
-
-// Trait AliasInfo
-//trait AliasInfo {
-//    AliasSet get_alias_set(pointer: P, instruction: I);
-//}
+mod cli;
+mod utils;
 
 use std::collections::HashMap;
+use crate::cli::CommandLineArgs;
+use crate::example_taint_flow_ir::{DummyConcreteValue, DummyFlowFact};
+use crate::icfg::{FunctionIndex, ProgramPos, StatementIndex};
+use crate::ide::EntryPoint;
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-struct FunctionIndex(u32);
+mod aliases {
+    // Trait PointsToInfo
+    //trait PointsToInfo {
+    //    PointsToSet get_points_to_set(pointer: P, instruction: I);
+    //}
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-struct StatementIndex(u32);
-
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
-struct ProgramPos {
-    function_index: FunctionIndex,
-    statement_index: StatementIndex,
+    // Trait AliasInfo
+    //trait AliasInfo {
+    //    AliasSet get_alias_set(pointer: P, instruction: I);
+    //}
 }
 
-struct ICFGEdge {
-    current: ProgramPos,
-    successor: ProgramPos,
+mod icfg {
+    #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+    pub struct FunctionIndex(pub u32);
+    impl FunctionIndex { pub fn new(index: usize) -> FunctionIndex { FunctionIndex(index as u32) } }
+
+    #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+    pub struct StatementIndex(pub u32);
+    impl StatementIndex { pub fn new(index: usize) -> StatementIndex { StatementIndex(index as u32) } }
+
+    #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+    pub struct ProgramPos {
+        pub function: FunctionIndex,
+        pub statement: StatementIndex,
+    }
+    impl ProgramPos {
+        pub fn new(function: FunctionIndex, statement: StatementIndex) -> Self {
+            ProgramPos { function, statement }
+        }
+        pub fn function_start(function: FunctionIndex) -> ProgramPos {
+            ProgramPos { function, statement: StatementIndex(0) }
+        }
+        pub fn next_position(&self) -> ProgramPos {
+            ProgramPos {
+                function: self.function,
+                statement: StatementIndex(self.statement.0.checked_add(1).expect("u32 too small"))
+            }
+        }
+    }
+
+    pub struct ICFGEdge {
+        pub current: ProgramPos,
+        pub successor: ProgramPos,
+    }
+
+    // TODO: Summaries!
+    pub trait ICFG {
+        fn get_successors(&self, pos: ProgramPos) -> Vec<ProgramPos>; // TODO: What about return statement? How are they able to return the successor function_index without knowing the call stack?
+        fn get_call_instructions_in_function_as_program_pos(&self, function: FunctionIndex) -> Vec<ProgramPos>;
+        fn all_instructions(&self) -> Vec<ProgramPos>;
+        fn is_starting_point_or_call_site(&self, pos: ProgramPos) -> bool;
+        fn get_starting_point_for(&self, function: FunctionIndex) -> ProgramPos;
+    }
 }
 
-// TODO: Summaries!
-trait ICFG {
-    fn get_successors(&self, pos: ProgramPos) -> Vec<ProgramPos>; // TODO: What about return statement? How are they able to return the successor function_index without knowing the call stack?
-    fn get_call_instructions_in_function_as_program_pos(&self, function: FunctionIndex) -> Vec<ProgramPos>;
-    fn all_instructions(&self) -> Vec<ProgramPos>;
-    fn is_starting_point_or_call_site(&self, pos: ProgramPos) -> bool;
-    fn get_starting_point_for(&self, function: FunctionIndex) -> ProgramPos;
-}
-
-trait Joinable {
+pub trait Joinable {
     fn join_with(&self, edge2: Self) -> Self; // merge multiple branches potentially loosing information.
 }
-trait Composable {
+pub trait Composable {
     fn compose_with(&self, edge2: Self) -> Self; // sequential application of two edge functions (first x+=1, then x+=2 -> results in x+=3)
 }
-trait Computable<ConcreteValue> {
+pub trait Computable<ConcreteValue> {
     fn compute(&self, input: &ConcreteValue) -> ConcreteValue; // evaluates this edge function for a concrete value, returning a resulting value of the same type.
 }
 
 
 pub mod ide {
     use std::collections::{HashMap, HashSet};
+    use std::fmt::{Debug, Formatter};
     use std::hash::Hash;
-    use super::*;
+    use super::{*, icfg::*, example_taint_flow_ir::*};
 
-
+    #[derive(Debug)]
     struct IDEJumpFunctionTable<P: IDEProblem> {
         // Note: The Vec holds HashMaps for each function. The index of the Vec element encodes the FunctionIndex.
         data: Vec<HashMap<JumpFunctionKey<P>, P::Weight>>
@@ -65,30 +93,37 @@ pub mod ide {
     impl <P: IDEProblem> IDEJumpFunctionTable<P> {
         pub fn already_visited(&self, item: &Phase1WorklistItem<P>) -> bool { todo!() }
         pub fn get_at_program_pos(&self, pos: ProgramPos) -> P::Weight {
-            todo!()
+            P::Weight::default() // TODO
         }
-
     }
-    trait IDEProblem {
-        type FlowFact: Clone + Hash + Eq;
-        type ConcreteValue: Clone + Joinable + PartialEq;
-        type Weight: Clone + Composable + Computable<Self::ConcreteValue> + Joinable + PartialEq;
+    pub trait IDEProblem: Debug {
+        type FlowFact: Clone + Hash + Eq + Debug + Default;
+        type ConcreteValue: Clone + Joinable + PartialEq + Debug + Default;
+        type Weight: Clone + Composable + Computable<Self::ConcreteValue> + Joinable + PartialEq + Debug + Default;
+        type ControlFlowGraph: ICFG;
 
         fn apply_flow(icfg_edge: ICFGEdge, data_flow_fact: Self::FlowFact) -> Vec<Self::FlowFact>;
         //fn apply_normal_flow(icfg_edge: ICFGEdge, data_flow_fact: Self::FlowFact) -> Vec<Self::FlowFact>;
         //fn apply_call_flow(icfg_edge: ICFGEdge, data_flow_fact: Self::FlowFact) -> Vec<Self::FlowFact>;
         //fn apply_return_flow(icfg_edge: ICFGEdge, data_flow_fact: Self::FlowFact) -> Vec<Self::FlowFact>;
         //fn apply_call_to_return_flow(icfg_edge: ICFGEdge, data_flow_fact: Self::FlowFact) -> Vec<Self::FlowFact>;
+
+        fn get_control_flow_graph(&self) -> &Self::ControlFlowGraph;
     }
 
-    struct EntryPoint<P: IDEProblem> {
-        instruction: ProgramPos,
-        flow_fact: P::FlowFact,
-        concrete_value: P::ConcreteValue,
+    pub struct EntryPoint<P: IDEProblem> {
+        pub instruction: ProgramPos,
+        pub flow_fact: P::FlowFact,
+        pub concrete_value: P::ConcreteValue,
     }
 
-    struct SolverResults<P: IDEProblem> {
-        concrete_values: HashMap<(ProgramPos, P::FlowFact), P::ConcreteValue>,
+    pub struct SolverResults<P: IDEProblem> {
+        pub concrete_values: HashMap<(ProgramPos, P::FlowFact), P::ConcreteValue>,
+    }
+    impl <P: IDEProblem> Debug for SolverResults<P> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            self.concrete_values.fmt(f)
+        }
     }
     impl <P: IDEProblem> Default for SolverResults<P> {
         fn default() -> Self {
@@ -101,8 +136,10 @@ pub mod ide {
         }
     }
 
-
-    #[derive(Hash)]
+    // Jump Function Key = Edge in CFG.
+    // Starting point: First instruction of current function with the flow facts that hold before that instructions (passed in by call site).
+    // End point (second part of key in hashmap): Last instruction of the Jump Function (i.e. up to the point that the jump function has been built), ultimately the exit point of the function
+    #[derive(Hash, Debug)]
     struct JumpFunctionKey<P: IDEProblem> {
         fact_at_start: P::FlowFact,
 
@@ -116,37 +153,39 @@ pub mod ide {
         // IFDS specific:
         pos: ProgramPos,
         source_fact: P::FlowFact,
-        propagated_fact: P::FlowFact,
+        propagated_fact: P::FlowFact, // TODO clarify
 
         // IDE specific:
-        edge_function: P::Weight, // ?
+        weight: P::Weight, // ?
     }
     impl <P: IDEProblem> Phase1WorklistItem<P> {
         pub fn new_with_entry_point(entry_point: &EntryPoint<P>) -> Self {
-            todo!()
+            Self {
+                pos: entry_point.instruction,
+                source_fact: entry_point.flow_fact.clone(),
+                propagated_fact: entry_point.flow_fact.clone(), // TODO not really
+                weight: Default::default(),
+            }
         }
         fn get_successor_worklist_items(&self) -> Vec<Self> {
-            todo!()
+            // TODO: implement me
+
+            vec![]
         }
     }
 
     struct Phase2WorklistItem<P: IDEProblem> {
-        // TODO: The Phase2WorklistItem happens to hold the same data as the EntryPoint struct! Unify?
         instruction: ProgramPos,
         flow_fact: P::FlowFact,
         concrete_value: P::ConcreteValue,
     }
+
     fn propagate_into_callees<P: IDEProblem>(call_instruction: ProgramPos) -> Vec<Phase2WorklistItem<P>> {
         todo!()
     }
 
+    pub fn solve<P: IDEProblem>(problem: P, entry_points: Vec<EntryPoint<P>>) -> SolverResults<P> {
 
-    fn solve<P: IDEProblem>(problem: P, entry_points: Vec<EntryPoint<P>>, icfg: &impl ICFG) -> SolverResults<P> {
-    
-        // Jump Function = Edge in CFG.
-        // Starting point: First instruction of current function with the flow facts that hold before that instructions (passed in by call site).
-        // End point (second part of key in hashmap): Last inst
-    
         // FlowFact = Variable für die wir die Jump Function berechnen, oder allgemein: Was wir mit der Analyse "verfolgen"; wofür wir die EdgeValues berechnen.
         // The first flow fact: 
         // The second flow fact is the tainted variable.
@@ -175,6 +214,8 @@ pub mod ide {
             }
         }
 
+        log::info!("Calculated Exploded Supergraph (ESG): {:?}", ide_jump_function_table);
+
         {
             // Phase 2.1: Compute concrete values by propagating at calls into callees leading us concrete values at all call instructions and function starting points naturally.
             let mut worklist: Vec<Phase2WorklistItem<P>> = vec![];
@@ -190,11 +231,11 @@ pub mod ide {
             }
 
             while let Some(item) = worklist.pop() {
-                let function = item.instruction.function_index;
-                for call_instr in icfg.get_call_instructions_in_function_as_program_pos(function) {
+                let function = item.instruction.function;
+                for call_instr in problem.get_control_flow_graph().get_call_instructions_in_function_as_program_pos(function) {
                     let weight: P::Weight = ide_jump_function_table.get_at_program_pos(call_instr);
                     let computed_value = weight.compute(&item.concrete_value);
-                    let flow_fact = todo!(); // TODO
+                    let flow_fact = P::FlowFact::default(); // TODO
                     let was_updated = results.insert_or_join(weight, flow_fact, computed_value);
                     if was_updated {
                         worklist.append(&mut propagate_into_callees(call_instr));
@@ -204,19 +245,23 @@ pub mod ide {
 
 
 
-            // Phase 2.2: Compute all concrete values for all instructions not yet visited in Phase 2.1
+            // Phase 2.2
+            // Compute all concrete values for all instructions not yet visited in Phase 2.1
+            // (all instructions except call instructions and function starting points)
+            let icfg = problem.get_control_flow_graph();
             for program_pos in icfg.all_instructions() {
                 if icfg.is_starting_point_or_call_site(program_pos) {
                     // Note: These are already treated in Phase 2.1
                     continue;
                 }
-                //let starting_point = icfg.get_starting_point_for(program_pos.function_index);
-                let starting_point_fact = todo!(); // How do we get the starting point fact?
+                // TODO
+                //  let starting_point = icfg.get_starting_point_for(program_pos.function_index);
+                let starting_point_fact = P::FlowFact::default(); // TODO How do we get the starting point fact?
                 let weight: P::Weight = ide_jump_function_table.get_at_program_pos(program_pos);
 
                 if let Some(value) = results.concrete_values.get(&(program_pos, starting_point_fact)) {
                     let computed_value = weight.compute(value);
-                    let flow_fact = todo!(); // TODO
+                    let flow_fact = P::FlowFact::default(); // TODO not really...
                     results.concrete_values.insert((program_pos, flow_fact), computed_value);
                 }
             }
@@ -226,14 +271,221 @@ pub mod ide {
     }
 }
 
-fn main() {
 
+/// Here, we define a toy-like example IR for describing taint flow specific problems.
+///
+/// In Phasar, the solver is written in a generic way and does not assume a specific IR format.
+/// This makes it possible to support different IR's, which can be hand-crafted for specific problems.
+///
+/// The advantage of a problem-specific IR is that it usually leads to a smaller Instruction-Set,
+/// which simplifies the overall implementation. But this also means that we need to transform the
+/// actual program into the problem-specific IR ahead-of-time, dropping all information that is
+/// not relevant for the problem domain.
+///
+/// In a real-world scenario, we would additionally need to have some way to map any IR statement back
+/// to the original statement, or at least it's line and column number, so we are able to report findings
+/// at the right places in the actual source code.
+mod example_taint_flow_ir {
+    use std::fmt::{Debug, Formatter};
+    use crate::icfg::{FunctionIndex, ICFG, ICFGEdge, ProgramPos};
+    use crate::ide::{EntryPoint, IDEProblem};
+    use crate::{Composable, Computable, Joinable, StatementIndex};
+
+    #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+    pub struct LocalVarId(pub u32);
+
+    #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+    pub enum VariableId {
+        Local(LocalVarId)
+    }
+    #[derive(Debug)]
+    pub enum Statement {
+        Source(SourceStmt),
+        SetConstant(SetConstantStmt),
+        Assign(AssignStmt),
+        Call(CallStmt),
+        Return(ReturnStmt),
+        Sink(SinkStmt),
+    }
+    impl Statement {
+        pub fn is_call(&self) -> bool { if let Statement::Call(_) = self { true } else { false } }
+    }
+    #[derive(Debug)]
+    pub struct SourceStmt {
+        pub tainting_var: VariableId,
+    }
+    #[derive(Debug)]
+    pub struct AssignStmt {
+        pub lhs: VariableId,
+        pub rhs: VariableId,
+    }
+    #[derive(Debug)]
+    pub struct SinkStmt {
+        pub relevant_var: VariableId
+    }
+    #[derive(Debug)]
+    pub struct SetConstantStmt {
+        pub lhs: VariableId,
+        pub rhs: DummyConcreteValue,
+    }
+    #[derive(Debug)]
+    pub struct CallStmt {
+        pub return_var: Option<VariableId>,
+        pub arguments: Vec<Option<VariableId>>,
+        pub function: FunctionIndex,
+    }
+    #[derive(Debug)]
+    pub struct ReturnStmt {
+        pub return_value: Option<VariableId>,
+    }
+    #[derive(Debug)]
+    pub struct Program {
+        pub functions: Vec<Function>,
+    }
+    impl Program {
+        fn get_stmt(&self, pos: ProgramPos) -> &Statement {
+            let f = &self.functions[pos.function.0 as usize];
+            &f.statements[pos.statement.0 as usize]
+        }
+    }
+    impl ICFG for Program {
+        fn get_successors(&self, pos: ProgramPos) -> Vec<ProgramPos> {
+            match self.get_stmt(pos) {
+                Statement::Source(_) | Statement::Assign(_) | Statement::Sink(_) | Statement::SetConstant(_)  => {
+                    vec![pos.next_position()]
+                }
+                Statement::Call(call) => {
+                    vec![ProgramPos::function_start(call.function)]
+                }
+                Statement::Return(_) => {
+                    todo!() // TODO: How to implement this?
+                }
+            }
+        }
+
+        fn get_call_instructions_in_function_as_program_pos(&self, function: FunctionIndex) -> Vec<ProgramPos> {
+            let f = &self.functions[function.0 as usize];
+            f.statements
+                .iter()
+                .enumerate()
+                .filter(|(_, stmt)| stmt.is_call())
+                .map(|x| ProgramPos::new(function, StatementIndex(x.0 as u32)))
+                .collect()
+        }
+
+        fn all_instructions(&self) -> Vec<ProgramPos> {
+            self.functions
+                .iter()
+                .enumerate()
+                .flat_map(|(function_index, f) |
+                    (0..f.statements.len())
+                        .map(move |statement_index| ProgramPos::new(
+                            FunctionIndex::new(function_index),
+                            StatementIndex::new(statement_index)
+                        ))
+                )
+                .collect()
+        }
+
+        fn is_starting_point_or_call_site(&self, pos: ProgramPos) -> bool {
+            pos.statement.0 == 0 || self.get_stmt(pos).is_call()
+        }
+
+        fn get_starting_point_for(&self, function: FunctionIndex) -> ProgramPos {
+            todo!()
+        }
+    }
+    #[derive(Debug)]
+    pub struct Function {
+        pub statements: Vec<Statement>
+    }
+    #[derive(Debug)]
+    pub struct TaintFlowProblem {
+        pub program: Program,
+    }
+
+    #[derive(Clone, Hash, PartialEq, Eq, Debug, Default)]
+    pub struct DummyConcreteValue;
+
+    #[derive(Clone, Hash, PartialEq, Eq, Debug, Default)]
+    pub struct DummyFlowFact;
+
+    #[derive(Clone, Hash, PartialEq, Eq, Debug)]
+    pub enum DummyWeight {
+        NoWeight, // i.e. "Bottom"
+        //...
+    }
+    impl Default for DummyWeight {
+        fn default() -> Self { DummyWeight::NoWeight }
+    }
+
+    impl Joinable for DummyConcreteValue { fn join_with(&self, edge2: Self) -> Self { edge2 } }
+    impl Joinable for DummyWeight { fn join_with(&self, edge2: Self) -> Self { edge2 } }
+    impl Computable<DummyConcreteValue> for DummyWeight { fn compute(&self, input: &DummyConcreteValue) -> DummyConcreteValue { todo!() } }
+    impl Composable for DummyWeight { fn compose_with(&self, edge2: Self) -> Self { todo!() } }
+
+
+    impl IDEProblem for TaintFlowProblem {
+        type FlowFact = DummyFlowFact;
+        type ConcreteValue = DummyConcreteValue;
+        type Weight = DummyWeight;
+        type ControlFlowGraph = Program;
+
+        fn apply_flow(icfg_edge: ICFGEdge, data_flow_fact: Self::FlowFact) -> Vec<Self::FlowFact> {
+            todo!()
+        }
+
+        fn get_control_flow_graph(&self) -> &Self::ControlFlowGraph { &self.program }
+    }
 }
 
-#[cfg(tests)]
+
+fn main() {
+    // Parse CLI arguments (e.g. -v, -vv, -vvv) to activate verbose logging or quiet mode with -q.
+    use clap::Parser;
+    let cli_arguments = CommandLineArgs::parse();
+    cli_arguments.init_logger();
+
+    use example_taint_flow_ir::*;
+    let problem = TaintFlowProblem {
+        program: Program {
+            functions: vec![
+                Function {
+                    statements: vec![
+                        // $0 = source()
+                        Statement::Source(SourceStmt { tainting_var: VariableId::Local(LocalVarId(0))}),
+
+                        // $1 = $0
+                        Statement::Assign(AssignStmt {
+                            lhs: VariableId::Local(LocalVarId(1)),
+                            rhs: VariableId::Local(LocalVarId(0)),
+                        }),
+
+                        // sink($1)
+                        Statement::Sink(SinkStmt { relevant_var: VariableId::Local(LocalVarId(1)) }),
+                    ]
+                }
+            ]
+        }
+    };
+
+    let entry_points = vec![
+        EntryPoint {
+            flow_fact: DummyFlowFact,
+            concrete_value: DummyConcreteValue,
+            instruction: ProgramPos::new(FunctionIndex(0), StatementIndex(0))
+        }
+    ];
+
+    let results = ide::solve(problem, entry_points);
+
+    log::info!("Got results: {:?}", results);
+}
+
+#[cfg(test)]
 mod tests {
     #[test]
-    fn test_dummy() {
+    fn test_ir() {
 
     }
 }
