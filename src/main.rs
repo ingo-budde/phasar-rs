@@ -116,7 +116,7 @@ pub mod ide {
             P::Weight::default() // TODO
         }
     }
-    pub trait IDEProblem: Debug {
+    pub trait IDEProblem: Hash + Eq + Debug + PartialEq { // Note: We require "IDEProblem: Hash + Eq + PartialEq", just to be able to derive those traits at structs using "P: FlowFact where P: IDEProblem" - see rust bug https://github.com/rust-lang/rust/issues/26925
         type FlowFact: Clone + Hash + Eq + Debug + Default + PartialEq;
         type ConcreteValue: Clone + Joinable + PartialEq + Debug + Default;
         type Weight: Clone + Composable + Computable<Self::ConcreteValue> + Joinable + PartialEq + Debug + Default;
@@ -159,7 +159,7 @@ pub mod ide {
     // Jump Function Key = Edge in CFG.
     // Starting point: First instruction of current function with the flow facts that hold before that instructions (passed in by call site).
     // End point (second part of key in hashmap): Last instruction of the Jump Function (i.e. up to the point that the jump function has been built), ultimately the exit point of the function
-    #[derive(Debug)]
+    #[derive(Debug, PartialEq, Eq, Hash)]
     struct JumpFunctionKey<P: IDEProblem> {
         fact_at_start: P::FlowFact,
 
@@ -168,18 +168,7 @@ pub mod ide {
         // Note2: This also represents the tainted variable.
         fact_at_end: P::FlowFact,
     }
-    impl <P: IDEProblem> PartialEq for JumpFunctionKey<P> {
-        fn eq(&self, other: &Self) -> bool {
-            self.fact_at_start.eq(&other.fact_at_start) && self.fact_at_end.eq(&other.fact_at_end)
-        }
-    }
-    impl <P: IDEProblem> Eq for JumpFunctionKey<P> { }
-    impl <P: IDEProblem> Hash for JumpFunctionKey<P> {
-        fn hash<H: Hasher>(&self, state: &mut H) {
-            self.fact_at_start.hash(state);
-            self.fact_at_end.hash(state);
-        }
-    }
+
 
 
 
@@ -332,6 +321,7 @@ pub mod ide {
 /// at the right places in the actual source code.
 mod example_taint_flow_ir {
     use std::fmt::{Debug, Formatter};
+    use std::hash::{Hash, Hasher};
     use crate::icfg::{FunctionIndex, ICFG, ICFGEdge, ProgramPos};
     use crate::ide::{EntryPoint, IDEProblem};
     use crate::{Composable, Computable, Joinable, StatementIndex};
@@ -453,6 +443,10 @@ mod example_taint_flow_ir {
     pub struct TaintFlowProblem {
         pub program: Program,
     }
+    // Note: We require "IDEProblem: Hash + Eq + PartialEq", just to be able to derive those traits at structs using "P: FlowFact where P: IDEProblem" - see rust bug https://github.com/rust-lang/rust/issues/26925
+    impl PartialEq for TaintFlowProblem { fn eq(&self, other: &Self) -> bool { panic!("Tried to compare TaintFlowProblem") } }
+    impl Eq for TaintFlowProblem { }
+    impl Hash for TaintFlowProblem { fn hash<H: Hasher>(&self, state: &mut H) {  panic!("Tried to hash TaintFlowProblem") } }
 
     #[derive(Clone, Hash, PartialEq, Eq, Debug, Default)]
     pub struct DummyConcreteValue;
