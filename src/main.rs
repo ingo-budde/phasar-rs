@@ -131,6 +131,7 @@ pub mod ide {
     }
 
     struct Phase2WorklistItem<P: IDEProblem> {
+        // TODO: The Phase2WorklistItem happens to hold the same data as the EntryPoint struct! Unify?
         instruction: ProgramPos,
         flow_fact: P::FlowFact,
         concrete_value: P::ConcreteValue,
@@ -176,12 +177,12 @@ pub mod ide {
 
         {
             // Phase 2.1: Compute concrete values by propagating at calls into callees leading us concrete values at all call instructions and function starting points naturally.
-            // TODO: This happens to hold the same data as the EntryPoint struct! Unify?
             let mut worklist: Vec<Phase2WorklistItem<P>> = vec![];
             let mut results: SolverResults<P> = SolverResults::default();
 
             for entry_point in &entry_points {
                 worklist.push(Phase2WorklistItem {
+                    // TODO: The Phase2WorklistItem happens to hold the same data as the EntryPoint struct! Unify?
                     instruction: entry_point.instruction,
                     flow_fact: entry_point.flow_fact.clone(),
                     concrete_value: entry_point.concrete_value.clone()
