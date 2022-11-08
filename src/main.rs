@@ -40,11 +40,16 @@ mod icfg {
         pub fn function_start(function: FunctionIndex) -> ProgramPos {
             ProgramPos { function, statement: StatementIndex(0) }
         }
-        pub fn next_position(&self) -> ProgramPos {
-            ProgramPos {
-                function: self.function,
-                statement: StatementIndex(self.statement.0.checked_add(1).expect("u32 too small"))
+        pub fn try_next_position(&self, num_instructions: usize) -> Option<ProgramPos> {
+            if let Some(next_statement) = self.statement.0.checked_add(1) {
+                if (next_statement as usize) < num_instructions {
+                    return Some(ProgramPos {
+                        function: self.function,
+                        statement: StatementIndex(next_statement)
+                    })
+                }
             }
+            None
         }
     }
 
@@ -64,10 +69,10 @@ mod icfg {
 }
 
 pub trait Joinable {
-    fn join_with(&self, edge2: Self) -> Self; // merge multiple branches potentially loosing information.
+    fn join_with(&self, edge2: &Self) -> Self; // merge multiple branches potentially loosing information.
 }
 pub trait Composable {
-    fn compose_with(&self, edge2: Self) -> Self; // sequential application of two edge functions (first x+=1, then x+=2 -> results in x+=3)
+    fn compose_with(&self, edge2: &Self) -> Self; // sequential application of two edge functions (first x+=1, then x+=2 -> results in x+=3)
 }
 pub trait Computable<ConcreteValue> {
     fn compute(&self, input: &ConcreteValue) -> ConcreteValue; // evaluates this edge function for a concrete value, returning a resulting value of the same type.
@@ -77,27 +82,42 @@ pub trait Computable<ConcreteValue> {
 pub mod ide {
     use std::collections::{HashMap, HashSet};
     use std::fmt::{Debug, Formatter};
-    use std::hash::Hash;
+    use std::hash::{Hash, Hasher};
     use super::{*, icfg::*, example_taint_flow_ir::*};
 
     #[derive(Debug)]
     struct IDEJumpFunctionTable<P: IDEProblem> {
-        // Note: The Vec holds HashMaps for each function. The index of the Vec element encodes the FunctionIndex.
-        data: Vec<HashMap<JumpFunctionKey<P>, P::Weight>>
+        // TODO: Replace the outer HashMap by a vector? -> Come up with a good key...
+        data: HashMap<ProgramPos, HashMap<JumpFunctionKey<P>, P::Weight>>,
     }
     impl <P: IDEProblem> Default for IDEJumpFunctionTable<P> {
         fn default() -> Self {
-            IDEJumpFunctionTable { data: vec![] }
+            IDEJumpFunctionTable { data: Default::default() }
         }
     }
     impl <P: IDEProblem> IDEJumpFunctionTable<P> {
-        pub fn already_visited(&self, item: &Phase1WorklistItem<P>) -> bool { todo!() }
+        pub fn handle_worklist_item(&mut self, item: &Phase1WorklistItem<P>) -> bool {
+            let x = self.data.entry(item.pos).or_default();
+            let key = JumpFunctionKey { fact_at_start: item.source_fact.clone(), fact_at_end: item.propagated_fact.clone() };
+            if let Some(weight) = x.get_mut(&key) {
+                let new_weight = weight.join_with(&item.weight);
+                if new_weight == *weight {
+                    return false;
+                } else {
+                    *weight = new_weight;
+                    return true;
+                }
+            } else {
+                x.insert(key, item.weight.clone());
+                return true;
+            }
+        }
         pub fn get_at_program_pos(&self, pos: ProgramPos) -> P::Weight {
             P::Weight::default() // TODO
         }
     }
     pub trait IDEProblem: Debug {
-        type FlowFact: Clone + Hash + Eq + Debug + Default;
+        type FlowFact: Clone + Hash + Eq + Debug + Default + PartialEq;
         type ConcreteValue: Clone + Joinable + PartialEq + Debug + Default;
         type Weight: Clone + Composable + Computable<Self::ConcreteValue> + Joinable + PartialEq + Debug + Default;
         type ControlFlowGraph: ICFG;
@@ -139,7 +159,7 @@ pub mod ide {
     // Jump Function Key = Edge in CFG.
     // Starting point: First instruction of current function with the flow facts that hold before that instructions (passed in by call site).
     // End point (second part of key in hashmap): Last instruction of the Jump Function (i.e. up to the point that the jump function has been built), ultimately the exit point of the function
-    #[derive(Hash, Debug)]
+    #[derive(Debug)]
     struct JumpFunctionKey<P: IDEProblem> {
         fact_at_start: P::FlowFact,
 
@@ -148,6 +168,20 @@ pub mod ide {
         // Note2: This also represents the tainted variable.
         fact_at_end: P::FlowFact,
     }
+    impl <P: IDEProblem> PartialEq for JumpFunctionKey<P> {
+        fn eq(&self, other: &Self) -> bool {
+            self.fact_at_start.eq(&other.fact_at_start) && self.fact_at_end.eq(&other.fact_at_end)
+        }
+    }
+    impl <P: IDEProblem> Eq for JumpFunctionKey<P> { }
+    impl <P: IDEProblem> Hash for JumpFunctionKey<P> {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.fact_at_start.hash(state);
+            self.fact_at_end.hash(state);
+        }
+    }
+
+
 
     struct Phase1WorklistItem<P: IDEProblem> {
         // IFDS specific:
@@ -167,10 +201,18 @@ pub mod ide {
                 weight: Default::default(),
             }
         }
-        fn get_successor_worklist_items(&self) -> Vec<Self> {
-            // TODO: implement me
-
-            vec![]
+        fn get_successor_worklist_items(&self, icfg: &P::ControlFlowGraph) -> Vec<Self> {
+            icfg.get_successors(self.pos)
+                .into_iter()
+                .map(|pos| {
+                    Phase1WorklistItem {
+                        pos,
+                        source_fact: self.source_fact.clone(), // TODO
+                        propagated_fact: self.propagated_fact.clone(), // TODO
+                        weight: self.weight.clone() // TODO
+                    }
+                })
+                .collect()
         }
     }
 
@@ -203,18 +245,21 @@ pub mod ide {
         {
             let mut worklist: Vec<Phase1WorklistItem<P>> = vec![];
             for entry_point in &entry_points {
-                worklist.push(Phase1WorklistItem::new_with_entry_point(entry_point));
+                let item = Phase1WorklistItem::new_with_entry_point(entry_point);
+                if ide_jump_function_table.handle_worklist_item(&item) {
+                    worklist.push(item);
+                }
             }
             while let Some(current) = worklist.pop() {
-                for successor in current.get_successor_worklist_items() {
-                    if !ide_jump_function_table.already_visited(&successor) {
+                for successor in current.get_successor_worklist_items(&problem.get_control_flow_graph()) {
+                    if ide_jump_function_table.handle_worklist_item(&successor) {
                         worklist.push(successor);
                     }
                 }
             }
         }
 
-        log::info!("Calculated Exploded Supergraph (ESG): {:?}", ide_jump_function_table);
+        log::info!("Calculated Exploded Supergraph (ESG): {:#?}", ide_jump_function_table);
 
         {
             // Phase 2.1: Compute concrete values by propagating at calls into callees leading us concrete values at all call instructions and function starting points naturally.
@@ -350,9 +395,14 @@ mod example_taint_flow_ir {
     }
     impl ICFG for Program {
         fn get_successors(&self, pos: ProgramPos) -> Vec<ProgramPos> {
-            match self.get_stmt(pos) {
+            let f = &self.functions[pos.function.0 as usize];
+            match &f.statements[pos.statement.0 as usize] {
                 Statement::Source(_) | Statement::Assign(_) | Statement::Sink(_) | Statement::SetConstant(_)  => {
-                    vec![pos.next_position()]
+                    if let Some(next) = pos.try_next_position(f.statements.len()) {
+                        vec![next]
+                    } else {
+                        vec![]
+                    }
                 }
                 Statement::Call(call) => {
                     vec![ProgramPos::function_start(call.function)]
@@ -392,7 +442,7 @@ mod example_taint_flow_ir {
         }
 
         fn get_starting_point_for(&self, function: FunctionIndex) -> ProgramPos {
-            todo!()
+            ProgramPos::function_start(function)
         }
     }
     #[derive(Debug)]
@@ -419,10 +469,10 @@ mod example_taint_flow_ir {
         fn default() -> Self { DummyWeight::NoWeight }
     }
 
-    impl Joinable for DummyConcreteValue { fn join_with(&self, edge2: Self) -> Self { edge2 } }
-    impl Joinable for DummyWeight { fn join_with(&self, edge2: Self) -> Self { edge2 } }
+    impl Joinable for DummyConcreteValue { fn join_with(&self, edge2: &Self) -> Self { todo!() } }
+    impl Joinable for DummyWeight { fn join_with(&self, edge2: &Self) -> Self { todo!() } }
     impl Computable<DummyConcreteValue> for DummyWeight { fn compute(&self, input: &DummyConcreteValue) -> DummyConcreteValue { todo!() } }
-    impl Composable for DummyWeight { fn compose_with(&self, edge2: Self) -> Self { todo!() } }
+    impl Composable for DummyWeight { fn compose_with(&self, edge2: &Self) -> Self { todo!() } }
 
 
     impl IDEProblem for TaintFlowProblem {
@@ -479,7 +529,7 @@ fn main() {
 
     let results = ide::solve(problem, entry_points);
 
-    log::info!("Got results: {:?}", results);
+    log::info!("Got results: {:#?}", results);
 }
 
 #[cfg(test)]
