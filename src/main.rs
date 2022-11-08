@@ -36,8 +36,6 @@ trait ICFG {
     fn get_starting_point_for(&self, function: FunctionIndex) -> ProgramPos;
 }
 
-// Open Question: Can we really "remove" the EdgeFunction concept? How to represent it instead?
-
 trait Joinable {
     fn join_with(&self, edge2: Self) -> Self; // merge multiple branches potentially loosing information.
 }
@@ -54,12 +52,14 @@ pub mod ide {
     use std::hash::Hash;
     use super::*;
 
+
     struct IDEJumpFunctionTable<P: IDEProblem> {
-        x: Vec<HashMap<JumpFunctionKey<P>, P::Weight>>
+        // Note: The Vec holds HashMaps for each function. The index of the Vec element encodes the FunctionIndex.
+        data: Vec<HashMap<JumpFunctionKey<P>, P::Weight>>
     }
     impl <P: IDEProblem> Default for IDEJumpFunctionTable<P> {
         fn default() -> Self {
-            IDEJumpFunctionTable { x: vec![] }
+            IDEJumpFunctionTable { data: vec![] }
         }
     }
     impl <P: IDEProblem> IDEJumpFunctionTable<P> {
