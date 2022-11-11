@@ -2,7 +2,7 @@ use std::fs::File;
 use std::path::PathBuf;
 use log::LevelFilter;
 use clap_derive::Parser;
-use clap::Parser;
+
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
